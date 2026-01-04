@@ -1,23 +1,27 @@
 import streamlit as st
-import whisper
-import requests
 import tempfile
-import html
+import whisper
+import os
+from groq import Groq
 
 # ---------------- CONFIG ----------------
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "tinyllama"   # fastest on CPU
-# ---------------------------------------
-
 st.set_page_config(page_title="Interview Voice Assistant", layout="wide")
-st.title("🎙️ Interview Voice Assistant")
+st.title("🎙️ Interview Voice Assistant (FAST – FREE MODE)")
+# ---------------------------------------
 
 # ---------- Load Whisper ONCE ----------
 @st.cache_resource
 def load_whisper():
-    return whisper.load_model("base.en")
+    return whisper.load_model("base.en")  # fast on CPU
 
 whisper_model = load_whisper()
+
+# ---------- Groq Client ----------
+if "GROQ_API_KEY" not in os.environ:
+    st.error("GROQ_API_KEY not found. Please set environment variable.")
+    st.stop()
+
+groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 # ---------- Session State ----------
 if "chat" not in st.session_state:
@@ -32,15 +36,7 @@ role = st.selectbox(
     ["CloudOps Engineer", "DevOps Engineer", "Backend Developer"]
 )
 
-st.info("Flow: Record → Edit → Copy → Generate → Continue")
-
-# ---------- Chat History ----------
-if st.session_state.chat:
-    st.subheader("💬 Conversation")
-    for item in st.session_state.chat:
-        st.markdown(f"**You:** {item['question']}")
-        st.markdown(f"**AI:** {item['answer']}")
-        st.markdown("---")
+st.info("Flow: Speak → Transcribe → Edit → Generate → Continue")
 
 # ---------- Browser Mic ----------
 audio = st.audio_input("🎤 Record your question")
@@ -54,74 +50,49 @@ if audio is not None:
             result = whisper_model.transcribe(
                 tmp.name,
                 language="en",
-                initial_prompt=(
-                    "This is a technical interview question about "
-                    "Docker, Kubernetes, DevOps, CI CD, cloud security, RBAC, ITIL."
-                ),
-                beam_size=1,
-                best_of=1,
                 fp16=False
             )
-
             st.session_state.transcript = result["text"].strip()
 
 # ---------- Edit ----------
-st.subheader("✏️ Edit Question")
+st.subheader("✏️ Edit / Type Question")
 edited_question = st.text_area(
-    "Fix transcription if needed:",
+    "Question:",
     value=st.session_state.transcript,
     height=120
 )
 
-# ---------- Copy Button ----------
-if edited_question.strip():
-    escaped = html.escape(edited_question)
-    st.markdown(
-        f"""
-        <button onclick="navigator.clipboard.writeText(`{escaped}`)">
-            📋 Copy Question
-        </button>
-        """,
-        unsafe_allow_html=True
-    )
-
 # ---------- Generate ----------
 if st.button("🤖 Generate Answer"):
-    if edited_question.strip() == "":
+    if not edited_question.strip():
         st.warning("Please record or type a question.")
     else:
         prompt = f"""
-You are a professional {role} answering in a technical interview.
+You are a senior {role} in an interview.
 
-Rules:
-- Speak clearly and confidently
-- Use simple English
-- Explain step by step
-- Give 1 small real-world example if useful
-- No commands unless asked
-- Sound practical and experienced
+Answer clearly and professionally.
+Use simple spoken English.
+Explain step by step.
+Give enough detail an interviewer expects.
+
 Question:
-{st.session_state.transcript}
+{edited_question}
 """
 
         with st.spinner("Generating answer..."):
-            response = requests.post(
-                OLLAMA_URL,
-                json={
-                    "model": MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 500,
-                        "temperature": 0.3,
-                        "top_p": 0.9
-                    }
-                },
-                timeout=25
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "You are a senior interview expert."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=400
             )
 
-            answer = response.json().get("response", "No answer generated.")
+            answer = response.choices[0].message.content
 
+        # Save conversation
         st.session_state.chat.append({
             "question": edited_question,
             "answer": answer
@@ -129,3 +100,31 @@ Question:
 
         st.session_state.transcript = ""
         st.rerun()
+
+# ---------- Scrollable Chat History ----------
+st.subheader("💬 Conversation")
+
+st.markdown(
+    """
+    <style>
+    .chat-box {
+        max-height: 420px;
+        overflow-y: auto;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background-color: #fafafa;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown('<div class="chat-box">', unsafe_allow_html=True)
+
+for item in reversed(st.session_state.chat):  # newest first
+    st.markdown(f"**🧑 You:** {item['question']}")
+    st.markdown(f"**🤖 AI:** {item['answer']}")
+    st.markdown("---")
+
+st.markdown("</div>", unsafe_allow_html=True)
