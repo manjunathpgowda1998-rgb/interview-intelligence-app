@@ -1,7 +1,6 @@
 streamlit
-sounddevice
-numpy
-webrtcvad
 openai-whisper
 torch
-requests
+groq
+ffmpeg-python
+numpy
