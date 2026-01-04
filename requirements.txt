@@ -1,0 +1,7 @@
+streamlit
+sounddevice
+numpy
+webrtcvad
+openai-whisper
+torch
+requests
